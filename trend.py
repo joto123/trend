@@ -13,7 +13,6 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-BINANCE_SYMBOL = "BTCUSDT"
 RSI_PERIOD = 14
 MACD_SLOW = 26
 MACD_FAST = 12
@@ -21,16 +20,25 @@ MACD_SIGNAL = 9
 BB_PERIOD = 20
 FETCH_INTERVAL = 300  # секунди (5 минути)
 
-def fetch_prices(symbol=BINANCE_SYMBOL, interval="1m", limit=50):
-    url = f"https://api.binance.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
+def fetch_prices(symbol="bitcoin", vs_currency="usd", days="1", interval="minute"):
+    """
+    Взема исторически цени от CoinGecko за последните 24 часа (1 ден).
+    """
+    url = f"https://api.coingecko.com/api/v3/coins/{symbol}/market_chart"
+    params = {
+        "vs_currency": vs_currency,
+        "days": days,
+        "interval": interval,
+    }
     res = requests.get(url, params=params)
     res.raise_for_status()
     data = res.json()
-    close_prices = [float(candle[4]) for candle in data]
-    last_candle_time = data[-1][0]  # timestamp in ms
-    last_candle_dt = datetime.fromtimestamp(last_candle_time / 1000, tz=timezone.utc)
-    return close_prices, last_candle_dt
+
+    # CoinGecko връща списък от [timestamp, price]
+    prices = [price_point[1] for price_point in data["prices"]]
+    last_timestamp = data["prices"][-1][0] / 1000  # в сек.
+    last_candle_dt = datetime.fromtimestamp(last_timestamp, tz=timezone.utc)
+    return prices, last_candle_dt
 
 def calculate_rsi(prices, period=RSI_PERIOD):
     df = pd.DataFrame(prices, columns=["close"])
