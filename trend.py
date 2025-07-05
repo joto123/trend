@@ -1,18 +1,23 @@
-import logging
 import datetime
 import uuid
+import logging
+from supabase import create_client, Client
+import os
 
-# Конфигурация на логване - записва в trend.log, форматира с дата, ниво и съобщение
 logging.basicConfig(
-    filename='trend.log',
     format='%(asctime)s %(levelname)s: %(message)s',
     level=logging.INFO
 )
 
+url = os.getenv("SUPABASE_URL")
+key = os.getenv("SUPABASE_KEY")
+
+supabase: Client = create_client(url, key)
+
 def save_trend(price, rsi, action):
-    timestamp = datetime.datetime.utcnow().isoformat(timespec='milliseconds') + "Z"
+    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='milliseconds') + "Z"
     if rsi is None or rsi < 1:
-        logging.warning(f"Пропускане на запис - RSI твърде нисък: {rsi}")
+        logging.warning(f"Skipping save - RSI too low: {rsi}")
         return
 
     data = {
@@ -22,27 +27,18 @@ def save_trend(price, rsi, action):
         "rsi": rsi,
         "action": action,
     }
-
-    # Тук трябва да имаш конфигуриран supabase клиент, примерен запис:
     res = supabase.table("trend_data").insert(data).execute()
     if res.error:
-        logging.error(f"Грешка при запис в базата: {res.error}")
+        logging.error(f"Error saving to DB: {res.error}")
     else:
-        logging.info(f"Записан тренд: {data}")
+        logging.info(f"Saved trend: {data}")
 
 def main():
-    logging.info("Стартиране на тренд анализа")
-
-    # Тук постави твоята логика, пример:
-    price = 108055.30
-    rsi = 47.80
-    action = "Задръж"
-
-    logging.info(f"Текуща цена: {price}, RSI: {rsi}, Тренд: {action}")
-
+    # Примерни стойности
+    price = 123.45
+    rsi = 55
+    action = "buy"
     save_trend(price, rsi, action)
-
-    logging.info("Завършване на тренд анализа")
 
 if __name__ == "__main__":
     main()
