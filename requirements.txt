@@ -2,3 +2,4 @@ ccxt
 pandas
 supabase
 python-dotenv
+ta
