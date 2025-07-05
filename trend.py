@@ -1,86 +1,68 @@
 import time
-import ccxt
-import pandas as pd
-from collections import deque
-from ta.momentum import RSIIndicator
+import datetime
+import ta
+import uuid
 from supabase import create_client, Client
-import os
 
-# ✅ Зареждане на Supabase променливи от средата
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-# 🛡️ Проверка на променливите
-print("\n=== Environment Variables Check ===")
-print(f"SUPABASE_URL: {SUPABASE_URL}")
-print(f"SUPABASE_KEY is set: {SUPABASE_KEY is not None and SUPABASE_KEY != ''}")
-print("===================================\n")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise Exception("Supabase URL или ключът не са зададени в environment variables!")
-
-# 📡 Свързване със Supabase
+SUPABASE_URL = "https://xyz.supabase.co"
+SUPABASE_KEY = "your_supabase_key"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 💹 Настройка на борсата
-exchange = ccxt.gateio()
-symbol = 'BTC/USDT'
+prices = []
 
-# 🧠 История на цените за RSI
-prices = deque(maxlen=14)
+def calculate_rsi(prices, window=14):
+    if len(prices) < window:
+        return None
+    close_series = pd.Series(prices)
+    rsi = ta.momentum.RSIIndicator(close_series, window=window).rsi().iloc[-1]
+    return round(rsi, 2)
 
-print("🔁 Стартиране на мониторинга с RSI индикатор на BTC/USDT (Gate.io)...")
+def save_trend(price, rsi, action):
+    timestamp = datetime.datetime.utcnow().isoformat(timespec='milliseconds') + "Z"
+    if rsi is None or rsi < 1:
+        print(f"⚠️ Пропускане на запис - RSI стойност твърде ниска: {rsi}")
+        return
 
-while True:
-    try:
-        # Вземане на текущата цена
-        order_book = exchange.fetch_order_book(symbol)
-        bid = order_book['bids'][0][0] if order_book['bids'] else None
+    data = {
+        "id": str(uuid.uuid4()),
+        "timestamp": timestamp,
+        "price": price,
+        "rsi": rsi,
+        "action": action,
+    }
+    res = supabase.table("trend_data").insert(data).execute()
+    if res.error:
+        print(f"❌ Грешка при запис: {res.error}")
+    else:
+        print(f"✅ Записан тренд: {data}")
 
-        if bid is not None:
-            # Филтър за дублиране на цена
-            if len(prices) > 0 and bid == prices[-1]:
-                print(f"🔁 Цена не се е променила (${bid:.2f}), пропускане...")
-                time.sleep(5)
-                continue
+def get_action(rsi):
+    if rsi >= 70:
+        return "Продай"
+    elif rsi <= 30:
+        return "Купи"
+    else:
+        return "Задръж"
 
-            prices.append(bid)
+def main_loop():
+    # Имитация на данни, замени с реален fetch на цена
+    import random
+    import pandas as pd
 
-            if len(prices) == prices.maxlen:
-                df = pd.DataFrame(list(prices), columns=['close'])
-                rsi = RSIIndicator(df['close']).rsi().iloc[-1]
-
-                # Проверка за NaN стойност
-                if pd.isna(rsi):
-                    print("⚠️ RSI е NaN, изчакване на следващи стойности...")
-                    time.sleep(5)
-                    continue
-
-                if rsi > 70:
-                    action = "Продай"
-                elif rsi < 30:
-                    action = "Купи"
-                else:
-                    action = "Задръж"
-
-                print(f"📈 Цена: ${bid:.2f} | RSI: {rsi:.2f} | Тренд: {action}")
-
-                # 📝 Запис в Supabase
-                data = {
-                    "price": round(bid, 2),
-                    "rsi": round(rsi, 2),
-                    "action": action,
-                    "timestamp": int(time.time())
-                }
-
-                supabase.table("trend").insert(data).execute()
-            else:
-                print(f"📈 Цена: ${bid:.2f} | Събиране на данни... ({len(prices)}/{prices.maxlen})")
+    while True:
+        price = round(108000 + random.uniform(-100, 100), 2)
+        prices.append(price)
+        if len(prices) > 14:
+            prices.pop(0)
+        rsi = calculate_rsi(prices)
+        if rsi is None:
+            print(f"📈 Цена: {price} | Събиране на данни... ({len(prices)}/14)")
         else:
-            print("⚠️ Няма данни за bid цена.")
+            action = get_action(rsi)
+            print(f"📈 Цена: {price} | RSI: {rsi} | Тренд: {action}")
+            save_trend(price, rsi, action)
 
         time.sleep(10)
 
-    except Exception as e:
-        print(f"❌ Грешка: {e}")
-        time.sleep(15)
+if __name__ == "__main__":
+    main_loop()
