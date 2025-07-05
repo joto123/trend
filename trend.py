@@ -7,7 +7,6 @@ import pandas as pd
 from datetime import datetime, timezone
 from supabase import create_client
 
-# Инициализация на логване
 logging.basicConfig(level=logging.INFO)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -16,7 +15,12 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 BINANCE_SYMBOL = "BTCUSDT"
 RSI_PERIOD = 14
-FETCH_INTERVAL = 60  # сек
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
+BB_PERIOD = 20
+BB_STD_DEV = 2
+FETCH_INTERVAL = 60  # seconds
 
 def fetch_prices(symbol="BTCUSDT", interval="1m", limit=100):
     url = f"https://api.binance.com/api/v3/klines"
@@ -34,75 +38,42 @@ def fetch_prices(symbol="BTCUSDT", interval="1m", limit=100):
 def calculate_rsi(prices, period=14):
     df = pd.DataFrame(prices, columns=["close"])
     delta = df["close"].diff()
-
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
-
     avg_gain = gain.rolling(window=period).mean()
     avg_loss = loss.rolling(window=period).mean()
-
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
-    return round(rsi.iloc[-1], 2)
+    return rsi.iloc[-1]
 
-def calculate_macd(prices, slow=26, fast=12, signal=9):
+def calculate_macd(prices, fast=12, slow=26, signal=9):
     df = pd.DataFrame(prices, columns=["close"])
     exp1 = df["close"].ewm(span=fast, adjust=False).mean()
     exp2 = df["close"].ewm(span=slow, adjust=False).mean()
-    macd = exp1 - exp2
-    signal_line = macd.ewm(span=signal, adjust=False).mean()
-    histogram = macd - signal_line
-    return round(macd.iloc[-1], 4), round(signal_line.iloc[-1], 4), round(histogram.iloc[-1], 4)
+    macd_line = exp1 - exp2
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram = macd_line - signal_line
+    return macd_line.iloc[-1], signal_line.iloc[-1], histogram.iloc[-1]
 
-def calculate_bollinger_bands(prices, period=20, std_mult=2):
+def calculate_bollinger_bands(prices, period=20, std_dev=2):
     df = pd.DataFrame(prices, columns=["close"])
-    sma = df["close"].rolling(window=period).mean()
-    std = df["close"].rolling(window=period).std()
-    upper = sma + (std_mult * std)
-    lower = sma - (std_mult * std)
-    return round(upper.iloc[-1], 2), round(sma.iloc[-1], 2), round(lower.iloc[-1], 2)
+    rolling_mean = df["close"].rolling(window=period).mean()
+    rolling_std = df["close"].rolling(window=period).std()
+    upper_band = rolling_mean + (rolling_std * std_dev)
+    lower_band = rolling_mean - (rolling_std * std_dev)
+    return upper_band.iloc[-1], rolling_mean.iloc[-1], lower_band.iloc[-1]
 
-def calculate_stochastic(prices, k_period=14, d_period=3):
-    df = pd.DataFrame(prices, columns=["close"])
-    low_min = df["close"].rolling(window=k_period).min()
-    high_max = df["close"].rolling(window=k_period).max()
-    k = 100 * ((df["close"] - low_min) / (high_max - low_min))
-    d = k.rolling(window=d_period).mean()
-    return round(k.iloc[-1], 2), round(d.iloc[-1], 2)
-
-def calculate_sma(prices, period=50):
-    df = pd.DataFrame(prices, columns=["close"])
-    sma = df["close"].rolling(window=period).mean()
-    return round(sma.iloc[-1], 2)
-
-def determine_action(rsi, macd, macd_signal, stochastic_k, stochastic_d):
-    # Примерно комбиниране на индикатори за сигнал
-    buy_signals = 0
-    sell_signals = 0
-
-    if rsi < 30:
-        buy_signals += 1
-    elif rsi > 70:
-        sell_signals += 1
-
-    if macd > macd_signal:
-        buy_signals += 1
-    else:
-        sell_signals += 1
-
-    if stochastic_k > stochastic_d:
-        buy_signals += 1
-    else:
-        sell_signals += 1
-
-    if buy_signals > sell_signals:
+def determine_action(rsi, macd_hist, price, bb_upper, bb_lower):
+    # Примерна сложна логика на действие
+    if rsi < 30 and macd_hist > 0 and price < bb_lower:
         return "Купи"
-    elif sell_signals > buy_signals:
+    elif rsi > 70 and macd_hist < 0 and price > bb_upper:
         return "Продай"
     else:
         return "Задръж"
 
-def save_trend(price, rsi, macd, macd_signal, macd_hist, bb_upper, bb_middle, bb_lower, stochastic_k, stochastic_d, sma50, action):
+def save_trend(price, rsi, macd, macd_signal, macd_hist, bb_upper, bb_middle, bb_lower, action,
+               backtest_data=None):
     data = {
         "id": str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -111,37 +82,76 @@ def save_trend(price, rsi, macd, macd_signal, macd_hist, bb_upper, bb_middle, bb
         "macd": float(macd),
         "macd_signal": float(macd_signal),
         "macd_histogram": float(macd_hist),
-        "bollinger_upper": float(bb_upper),
-        "bollinger_middle": float(bb_middle),
-        "bollinger_lower": float(bb_lower),
-        "stochastic_k": float(stochastic_k),
-        "stochastic_d": float(stochastic_d),
-        "sma50": float(sma50),
+        "bb_upper": float(bb_upper),
+        "bb_middle": float(bb_middle) if bb_middle is not None else None,
+        "bb_lower": float(bb_lower),
         "action": action
     }
+
+    # Ако имаме backtest данни, добавяме ги
+    if backtest_data:
+        data.update({
+            "backtest_start": backtest_data.get("start"),
+            "backtest_end": backtest_data.get("end"),
+            "total_return": backtest_data.get("total_return"),
+            "num_trades": backtest_data.get("num_trades"),
+            "max_drawdown": backtest_data.get("max_drawdown"),
+            "win_rate": backtest_data.get("win_rate"),
+            "strategy_params": backtest_data.get("strategy_params"),
+        })
+
     res = supabase.table("trend_data").insert(data).execute()
     if res.status_code == 201:
         logging.info(f"✅ Записано успешно: {action}")
     else:
         logging.error(f"❌ Грешка при запис: {res.data}")
 
+def backtest_strategy(prices):
+    # Много прост backtest, примерно купи при RSI < 30, продай при RSI > 70
+    entry_price = None
+    trades = []
+    for i in range(len(prices)):
+        rsi = calculate_rsi(prices[:i+1])
+        if entry_price is None and rsi < 30:
+            entry_price = prices[i]
+        elif entry_price is not None and rsi > 70:
+            trades.append(prices[i] - entry_price)
+            entry_price = None
+    total_return = sum(trades) if trades else 0
+    num_trades = len(trades)
+    max_drawdown = 0  # Можеш да добавиш изчисление
+    win_rate = len([t for t in trades if t > 0]) / num_trades if num_trades > 0 else None
+    return {
+        "start": None,
+        "end": None,
+        "total_return": total_return,
+        "num_trades": num_trades,
+        "max_drawdown": max_drawdown,
+        "win_rate": win_rate,
+        "strategy_params": {"rsi_buy": 30, "rsi_sell": 70},
+    }
+
 def main_loop():
     while True:
         try:
-            prices = fetch_prices(BINANCE_SYMBOL, interval="1m", limit=100)
+            prices = fetch_prices(symbol=BINANCE_SYMBOL, limit=100)
             current_price = prices[-1]
 
-            rsi = calculate_rsi(prices, RSI_PERIOD)
+            rsi = calculate_rsi(prices)
             macd, macd_signal, macd_hist = calculate_macd(prices)
             bb_upper, bb_middle, bb_lower = calculate_bollinger_bands(prices)
-            stochastic_k, stochastic_d = calculate_stochastic(prices)
-            sma50 = calculate_sma(prices)
 
-            action = determine_action(rsi, macd, macd_signal, stochastic_k, stochastic_d)
+            action = determine_action(rsi, macd_hist, current_price, bb_upper, bb_lower)
 
-            logging.info(f"📈 Цена: {current_price}, RSI: {rsi}, MACD: {macd}, MACD Signal: {macd_signal}, BB Upper: {bb_upper}, BB Lower: {bb_lower}, Действие: {action}")
+            logging.info(
+                f"📈 Цена: {current_price:.2f}, RSI: {rsi:.2f}, MACD: {macd:.4f}, MACD Signal: {macd_signal:.4f}, "
+                f"BB Upper: {bb_upper:.2f}, BB Lower: {bb_lower:.2f}, Действие: {action}"
+            )
 
-            save_trend(current_price, rsi, macd, macd_signal, macd_hist, bb_upper, bb_middle, bb_lower, stochastic_k, stochastic_d, sma50, action)
+            # Backtest (може да се вика по-рядко или отделно)
+            backtest_data = backtest_strategy(prices)
+
+            save_trend(current_price, rsi, macd, macd_signal, macd_hist, bb_upper, bb_middle, bb_lower, action, backtest_data)
 
         except Exception as e:
             logging.error(f"❌ Грешка: {e}")
