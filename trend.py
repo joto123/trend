@@ -6,9 +6,7 @@ import requests
 import pandas as pd
 from datetime import datetime, timezone
 from supabase import create_client
-import ta  # технически индикатори
 
-# Настройка на логване
 logging.basicConfig(level=logging.INFO)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -17,78 +15,56 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 BINANCE_SYMBOL = "BTCUSDT"
 RSI_PERIOD = 14
-MACD_FAST = 12
-MACD_SLOW = 26
-MACD_SIGNAL = 9
-BB_WINDOW = 20
-BB_STD = 2
-FETCH_INTERVAL = 60  # сек
+FETCH_INTERVAL = 60  # секунди
 
-def fetch_prices(symbol=BINANCE_SYMBOL, interval="1m", limit=100):
+def fetch_prices(symbol="BTCUSDT", interval="1m", limit=100):
     url = "https://api.binance.com/api/v3/klines"
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit
-    }
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
     res = requests.get(url, params=params)
     res.raise_for_status()
     data = res.json()
-    close_prices = [float(candle[4]) for candle in data]
-    return close_prices
-
-def calculate_indicators(prices):
-    df = pd.DataFrame(prices, columns=["close"])
-    
-    # RSI
-    df["rsi"] = ta.momentum.rsi(df["close"], window=RSI_PERIOD)
-
-    # MACD
-    macd = ta.trend.MACD(df["close"], window_slow=MACD_SLOW, window_fast=MACD_FAST, window_sign=MACD_SIGNAL)
-    df["macd"] = macd.macd()
-    df["macd_signal"] = macd.macd_signal()
-    df["macd_diff"] = macd.macd_diff()
-
-    # Bollinger Bands
-    bb = ta.volatility.BollingerBands(df["close"], window=BB_WINDOW, window_dev=BB_STD)
-    df["bb_upper"] = bb.bollinger_hband()
-    df["bb_lower"] = bb.bollinger_lband()
-    df["bb_middle"] = bb.bollinger_mavg()
-    
+    df = pd.DataFrame(data, columns=[
+        "open_time","open","high","low","close","volume",
+        "close_time","quote_asset_volume","number_of_trades",
+        "taker_buy_base_asset_volume","taker_buy_quote_asset_volume","ignore"
+    ])
+    df["close"] = df["close"].astype(float)
     return df
 
-def determine_action(df):
-    latest = df.iloc[-1]
-    rsi = latest["rsi"]
-    macd = latest["macd"]
-    macd_signal = latest["macd_signal"]
-    price = latest["close"]
-    bb_upper = latest["bb_upper"]
-    bb_lower = latest["bb_lower"]
+def calculate_rsi(df, period=14):
+    delta = df["close"].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
-    action = "Задръж"
+def calculate_macd(df):
+    exp1 = df["close"].ewm(span=12, adjust=False).mean()
+    exp2 = df["close"].ewm(span=26, adjust=False).mean()
+    macd = exp1 - exp2
+    signal = macd.ewm(span=9, adjust=False).mean()
+    histogram = macd - signal
+    return macd, signal, histogram
 
-    # RSI стратегия
-    if rsi > 70:
-        action = "Продай"
-    elif rsi < 30:
-        action = "Купи"
+def calculate_bollinger_bands(df, period=20, std_multiplier=2):
+    sma = df["close"].rolling(window=period).mean()
+    std = df["close"].rolling(window=period).std()
+    upper_band = sma + std_multiplier * std
+    lower_band = sma - std_multiplier * std
+    return upper_band, sma, lower_band
 
-    # MACD crossover допълнително
-    if macd > macd_signal and action != "Продай":
-        action = "Купи"
-    elif macd < macd_signal and action != "Купи":
-        action = "Продай"
+def determine_action(rsi, macd, macd_signal, price, bb_upper, bb_lower):
+    if rsi < 30 and price < bb_lower and macd > macd_signal:
+        return "Купи"
+    elif rsi > 70 and price > bb_upper and macd < macd_signal:
+        return "Продай"
+    else:
+        return "Задръж"
 
-    # Bollinger Bands (цената близо до долната лента -> купи, горната -> продай)
-    if price <= bb_lower:
-        action = "Купи"
-    elif price >= bb_upper:
-        action = "Продай"
-
-    return action, rsi, macd, macd_signal, bb_upper, bb_lower
-
-def save_trend(price, rsi, macd, macd_signal, bb_upper, bb_lower, action):
+def save_trend(price, rsi, macd, macd_signal, macd_histogram, bb_upper, bb_middle, bb_lower, action):
     data = {
         "id": str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -96,24 +72,45 @@ def save_trend(price, rsi, macd, macd_signal, bb_upper, bb_lower, action):
         "rsi": float(rsi),
         "macd": float(macd),
         "macd_signal": float(macd_signal),
+        "macd_histogram": float(macd_histogram),
         "bb_upper": float(bb_upper),
+        "bb_middle": float(bb_middle),
         "bb_lower": float(bb_lower),
         "action": action
     }
     res = supabase.table("trend_data").insert(data).execute()
-    logging.info(f"✅ Записано успешно: {action}")
+    if res.status_code == 201:
+        logging.info(f"✅ Записано успешно: {action}")
+    else:
+        logging.error(f"❌ Грешка при запис: {res.json()}")
 
 def main_loop():
     while True:
         try:
-            prices = fetch_prices()
-            df = calculate_indicators(prices)
-            action, rsi, macd, macd_signal, bb_upper, bb_lower = determine_action(df)
-            current_price = prices[-1]
+            df = fetch_prices(BINANCE_SYMBOL, "1m", limit=100)
 
-            logging.info(f"📈 Цена: {current_price}, RSI: {rsi:.2f}, MACD: {macd:.4f}, MACD Signal: {macd_signal:.4f}, BB Upper: {bb_upper:.2f}, BB Lower: {bb_lower:.2f}, Действие: {action}")
+            rsi_series = calculate_rsi(df, RSI_PERIOD)
+            macd_series, macd_signal_series, macd_histogram_series = calculate_macd(df)
+            bb_upper, bb_middle, bb_lower = calculate_bollinger_bands(df)
 
-            save_trend(current_price, rsi, macd, macd_signal, bb_upper, bb_lower, action)
+            latest = df.iloc[-1]
+            price = latest["close"]
+            rsi = rsi_series.iloc[-1]
+            macd = macd_series.iloc[-1]
+            macd_signal = macd_signal_series.iloc[-1]
+            macd_histogram = macd_histogram_series.iloc[-1]
+            upper = bb_upper.iloc[-1]
+            middle = bb_middle.iloc[-1]
+            lower = bb_lower.iloc[-1]
+
+            action = determine_action(rsi, macd, macd_signal, price, upper, lower)
+
+            logging.info(
+                f"📈 Цена: {price}, RSI: {rsi:.2f}, MACD: {macd:.4f}, MACD Signal: {macd_signal:.4f}, "
+                f"BB Upper: {upper:.2f}, BB Middle: {middle:.2f}, BB Lower: {lower:.2f}, Действие: {action}"
+            )
+
+            save_trend(price, rsi, macd, macd_signal, macd_histogram, upper, middle, lower, action)
 
         except Exception as e:
             logging.error(f"❌ Грешка: {e}")
