@@ -82,8 +82,10 @@ def save_trend(price, rsi, macd, macd_signal, macd_histogram, bb_upper, bb_middl
     }
     res = supabase.table("trend_data").insert(data).execute()
 
-    if res.error:
-        logging.error(f"❌ Грешка: {res.error}")
+    # Проверка за грешка
+    # Ако няма status_code или е различен от 201, значи има проблем
+    if not hasattr(res, "status_code") or res.status_code != 201:
+        logging.error(f"❌ Грешка при запис: {res}")
     else:
         logging.info(f"✅ Записано успешно: {action}")
 
