@@ -15,7 +15,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 BINANCE_SYMBOL = "BTCUSDT"
 RSI_PERIOD = 14
-FETCH_INTERVAL = 60  # секунди
+FETCH_INTERVAL = 300  # секунди
 
 def fetch_prices(symbol=BINANCE_SYMBOL, interval="1m", limit=100):
     url = f"https://api.binance.com/api/v3/klines"
