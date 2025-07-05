@@ -19,7 +19,7 @@ while True:
         prices.append(bid)
 
         if len(prices) == prices.maxlen:
-            df = pd.DataFrame(prices, columns=['close'])
+            df = pd.DataFrame(list(prices), columns=['close'])  # 🔧 Тук е ключовата промяна
             rsi = RSIIndicator(df['close']).rsi().iloc[-1]
 
             if rsi > 70:
