@@ -13,9 +13,10 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-exchange = ccxt.binance()
+EXCHANGE_ID = 'kraken'
+exchange = getattr(ccxt, EXCHANGE_ID)()
 
-BINANCE_SYMBOL = "BTC/USDT"
+SYMBOL = 'BTC/USD'  # форматът на Kraken за BTC
 RSI_PERIOD = 14
 MACD_SLOW = 26
 MACD_FAST = 12
@@ -23,10 +24,10 @@ MACD_SIGNAL = 9
 BB_PERIOD = 20
 FETCH_INTERVAL = 300  # секунди (5 минути)
 
-def fetch_prices(symbol=BINANCE_SYMBOL, timeframe="1m", limit=100):
-    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-    close_prices = [candle[4] for candle in ohlcv]
-    last_timestamp = ohlcv[-1][0] / 1000  # милисекунди -> секунди
+def fetch_prices(symbol=SYMBOL, timeframe='1m', limit=100):
+    bars = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    close_prices = [bar[4] for bar in bars]  # барове: [timestamp, open, high, low, close, volume]
+    last_timestamp = bars[-1][0] / 1000  # в секунди
     last_candle_dt = datetime.fromtimestamp(last_timestamp, tz=timezone.utc)
     return close_prices, last_candle_dt
 
@@ -48,7 +49,7 @@ def calculate_macd(prices, slow=MACD_SLOW, fast=MACD_FAST, signal=MACD_SIGNAL):
     macd = exp1 - exp2
     macd_signal = macd.ewm(span=signal, adjust=False).mean()
     macd_hist = macd - macd_signal
-    return round(macd.iloc[-1], 4), round(macd_signal.iloc[-1],4), round(macd_hist.iloc[-1],4)
+    return round(macd.iloc[-1], 4), round(macd_signal.iloc[-1], 4), round(macd_hist.iloc[-1], 4)
 
 def calculate_bollinger_bands(prices, period=BB_PERIOD, std_dev=2):
     df = pd.DataFrame(prices, columns=["close"])
