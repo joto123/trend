@@ -1,53 +1,67 @@
-import os
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime
 from supabase import create_client, Client
+import os
+import logging
 
-# Вземаме URL и ключ от environment variables
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# Логване
+logging.basicConfig(level=logging.INFO)
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("Missing Supabase credentials in environment variables")
+# Supabase setup
+url: str = os.getenv("SUPABASE_URL")
+key: str = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(url, key)
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# Мапинг на кирилски действия към валидни за базата
+# Действия на английски => български
 ACTION_MAP = {
-    "Купи": "buy",
-    "Продай": "sell",
-    "Задръж": "hold",
-    # Можеш да добавиш още ако имаш нужда
+    "buy": "Купи",
+    "sell": "Продай",
+    "hold": "Задръж"
 }
 
-def save_trend(price: float, rsi: float, action_bg: str):
-    # Мапваме действие на валидна стойност
-    action = ACTION_MAP.get(action_bg)
-    if action is None:
-        raise ValueError(f"Invalid action: {action_bg}")
+# ВАЛИДНИ действия според базата (съответстващи на CHECK CONSTRAINT-а)
+VALID_ACTIONS = ["buy", "sell"]  # ⚠️ добави "hold", ако е позволено в базата
+
+def analyze_trend(price, rsi):
+    """Проста логика за тренд (примерно):"""
+    if rsi < 30:
+        return "buy"
+    elif rsi > 70:
+        return "sell"
+    else:
+        return "hold"  # само ако е разрешено от базата
+
+def save_trend(price, rsi, action_en):
+    """Записва тренда в Supabase, ако е валиден action"""
+    if action_en not in VALID_ACTIONS:
+        logging.warning(f"Пропуснат запис – '{action_en}' не е разрешен в базата.")
+        return
 
     data = {
-        # PostgreSQL timestamp with timezone в ISO формат, винаги с UTC
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "id": str(uuid.uuid4()),
+        "timestamp": datetime.utcnow().isoformat(),
         "price": price,
         "rsi": rsi,
-        "action": action
+        "action": action_en  # ⚠️ трябва да е съвместим с CHECK CONSTRAINT
     }
 
-    res = supabase.table("trend_data").insert(data).execute()
-
-    # res.data съдържа резултата, res.error — грешката (ако има)
-    if res.error:
-        print("Error inserting data:", res.error)
-    else:
-        print("Insert successful:", res.data)
+    try:
+        res = supabase.table("trend_data").insert(data).execute()
+        logging.info(f"Успешно записано: {res}")
+    except Exception as e:
+        logging.error(f"Грешка при запис: {e}")
 
 def main():
-    # Тук подготви или вземи данните си (пример)
-    price = 108000.0
+    # Примерни данни
+    price = 108000.00
     rsi = 55.0
-    action_bg = "Задръж"  # Пример на кирилица, който мапваме към "hold"
 
-    save_trend(price, rsi, action_bg)
+    action_en = analyze_trend(price, rsi)
+    action_bg = ACTION_MAP.get(action_en, "Неизвестно")
+
+    logging.info(f"Цена: {price}, RSI: {rsi}, Действие: {action_bg} ({action_en})")
+
+    save_trend(price, rsi, action_en)
 
 if __name__ == "__main__":
     main()
