@@ -1,19 +1,21 @@
-import os
 import datetime
 import logging
 import uuid
 from supabase import create_client, Client
+import os
 
+# Настройка на логване - ще пише в конзолата
 logging.basicConfig(
     format='%(asctime)s %(levelname)s: %(message)s',
     level=logging.INFO
 )
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+# Инициализиране на Supabase клиента от променливи на средата (за сигурност)
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    logging.error("SUPABASE_URL или SUPABASE_KEY не са зададени в environment variables!")
+    logging.error("Не са зададени SUPABASE_URL или SUPABASE_KEY!")
     exit(1)
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -34,15 +36,18 @@ def save_trend(price, rsi, action):
     }
 
     res = supabase.table("trend_data").insert(data).execute()
-    if res.error:
-        logging.error(f"Грешка при запис в базата: {res.error}")
+
+    if res.status_code != 201:
+        logging.error(f"Грешка при запис в базата: {res.data}")
     else:
         logging.info(f"Записан тренд: {data}")
 
 def main():
-    price = 108000.0
-    rsi = 55.0
-    action = "Задръж"
+    # Примерни данни, тук сложи реалната логика
+    price = 100.5
+    rsi = 45.0
+    action = "buy"
+
     save_trend(price, rsi, action)
 
 if __name__ == "__main__":
