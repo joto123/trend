@@ -1,30 +1,37 @@
 import os
 import uuid
-from datetime import datetime, timezone
 import logging
+from datetime import datetime, timezone
+import pandas as pd
 from supabase import create_client
+import requests
 
-# Настройка на логване
+# Supabase init (ключовете са през env)
+supabase_url = os.getenv("SUPABASE_URL")
+supabase_key = os.getenv("SUPABASE_KEY")
+supabase = create_client(supabase_url, supabase_key)
+
 logging.basicConfig(level=logging.INFO)
 
-# 🟢 Вземане на ключове от environment variables
-url = os.getenv("SUPABASE_URL")
-key = os.getenv("SUPABASE_KEY")
+# Примерен списък с исторически цени (замести го с реални данни)
+price_history = [
+    108100, 108050, 108000, 108000, 108200, 108300, 108250,
+    108100, 108150, 108050, 108000, 107950, 108000, 108100
+]
 
-# Проверка дали ключовете са зададени
-if not url or not key:
-    raise EnvironmentError("❌ SUPABASE_URL и/или SUPABASE_KEY не са зададени в средата!")
+def calculate_rsi(prices, period=14):
+    df = pd.DataFrame(prices, columns=["close"])
+    delta = df["close"].diff()
 
-# Създаване на клиент
-supabase = create_client(url, key)
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
 
-def get_price():
-    # Примерна фиксирана цена — тук можеш да добавиш реално API
-    return 108000.00
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
 
-def calculate_rsi():
-    # Примерна фиксирана RSI стойност — замени с реална логика при нужда
-    return 55.0
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return round(rsi.iloc[-1], 2)
 
 def determine_action(rsi):
     if rsi > 70:
@@ -38,24 +45,20 @@ def save_trend(price, rsi, action):
     data = {
         "id": str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "price": price,
-        "rsi": rsi,
+        "price": float(price),
+        "rsi": float(rsi),
         "action": action
     }
-
-    try:
-        res = supabase.table("trend_data").insert(data).execute()
-        logging.info(f"✅ Записано успешно: {action}")
-    except Exception as e:
-        logging.error("⚠️ Грешка при запис:", exc_info=True)
+    res = supabase.table("trend_data").insert(data).execute()
+    logging.info(f"✅ Записано успешно: {action}")
 
 def main():
-    price = get_price()
-    rsi = calculate_rsi()
-    action = determine_action(rsi)
+    current_price = price_history[-1]
+    rsi = calculate_rsi(price_history)
+    action_bg = determine_action(rsi)
 
-    logging.info(f"📈 Цена: {price}, RSI: {rsi}, Действие: {action}")
-    save_trend(price, rsi, action)
+    logging.info(f"📈 Цена: {current_price}, RSI: {rsi}, Действие: {action_bg}")
+    save_trend(current_price, rsi, action_bg)
 
 if __name__ == "__main__":
     main()
