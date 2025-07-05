@@ -1,2 +1,5 @@
 ccxt
+pandas
 ta
+supabase
+python-dotenv
