@@ -6,6 +6,7 @@ import requests
 import pandas as pd
 from datetime import datetime, timezone
 from supabase import create_client
+import ta  # technical analysis библиотека
 
 logging.basicConfig(level=logging.INFO)
 
@@ -13,17 +14,13 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-RSI_PERIOD = 14
-MACD_SLOW = 26
-MACD_FAST = 12
-MACD_SIGNAL = 9
-BB_PERIOD = 20
-FETCH_INTERVAL = 300  # секунди (5 минути)
+COINGECKO_SYMBOL = "bitcoin"
+VS_CURRENCY = "usd"
+DAYS = "1"
+INTERVAL = "minute"
+FETCH_INTERVAL = 300  # 5 минути
 
-def fetch_prices(symbol="bitcoin", vs_currency="usd", days="1", interval="minute"):
-    """
-    Взема исторически цени от CoinGecko за последните 24 часа (1 ден).
-    """
+def fetch_prices(symbol=COINGECKO_SYMBOL, vs_currency=VS_CURRENCY, days=DAYS, interval=INTERVAL):
     url = f"https://api.coingecko.com/api/v3/coins/{symbol}/market_chart"
     params = {
         "vs_currency": vs_currency,
@@ -34,45 +31,32 @@ def fetch_prices(symbol="bitcoin", vs_currency="usd", days="1", interval="minute
     res.raise_for_status()
     data = res.json()
 
-    # CoinGecko връща списък от [timestamp, price]
     prices = [price_point[1] for price_point in data["prices"]]
-    last_timestamp = data["prices"][-1][0] / 1000  # в сек.
+    last_timestamp = data["prices"][-1][0] / 1000
     last_candle_dt = datetime.fromtimestamp(last_timestamp, tz=timezone.utc)
     return prices, last_candle_dt
 
-def calculate_rsi(prices, period=RSI_PERIOD):
+def calculate_indicators(prices):
     df = pd.DataFrame(prices, columns=["close"])
-    delta = df["close"].diff()
 
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
+    # RSI
+    rsi = ta.momentum.RSIIndicator(df["close"], window=14).rsi().iloc[-1]
 
-    avg_gain = gain.rolling(window=period).mean()
-    avg_loss = loss.rolling(window=period).mean()
+    # MACD
+    macd_ind = ta.trend.MACD(df["close"], window_slow=26, window_fast=12, window_sign=9)
+    macd = macd_ind.macd().iloc[-1]
+    macd_signal = macd_ind.macd_signal().iloc[-1]
+    macd_histogram = macd_ind.macd_diff().iloc[-1]
 
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return round(rsi.iloc[-1], 2)
+    # Bollinger Bands
+    bb = ta.volatility.BollingerBands(df["close"], window=20, window_dev=2)
+    bb_upper = bb.bollinger_hband().iloc[-1]
+    bb_middle = bb.bollinger_mavg().iloc[-1]
+    bb_lower = bb.bollinger_lband().iloc[-1]
 
-def calculate_macd(prices, slow=MACD_SLOW, fast=MACD_FAST, signal=MACD_SIGNAL):
-    df = pd.DataFrame(prices, columns=["close"])
-    exp1 = df["close"].ewm(span=fast, adjust=False).mean()
-    exp2 = df["close"].ewm(span=slow, adjust=False).mean()
-    macd = exp1 - exp2
-    macd_signal = macd.ewm(span=signal, adjust=False).mean()
-    macd_hist = macd - macd_signal
-    return round(macd.iloc[-1], 4), round(macd_signal.iloc[-1],4), round(macd_hist.iloc[-1],4)
-
-def calculate_bollinger_bands(prices, period=BB_PERIOD, std_dev=2):
-    df = pd.DataFrame(prices, columns=["close"])
-    sma = df["close"].rolling(window=period).mean()
-    rstd = df["close"].rolling(window=period).std()
-    upper_band = sma + std_dev * rstd
-    lower_band = sma - std_dev * rstd
-    return round(upper_band.iloc[-1], 4), round(sma.iloc[-1], 4), round(lower_band.iloc[-1], 4)
+    return round(rsi, 2), round(macd, 4), round(macd_signal, 4), round(macd_histogram, 4), round(bb_upper, 4), round(bb_middle, 4), round(bb_lower, 4)
 
 def determine_action(rsi, macd, macd_signal, macd_histogram, bb_upper, bb_lower, price):
-    # По-комплексна логика за действие
     if rsi > 70 and price > bb_upper and macd < macd_signal:
         return "Продай"
     elif rsi < 30 and price < bb_lower and macd > macd_signal:
@@ -108,13 +92,10 @@ def save_trend(price, rsi, macd, macd_signal, macd_histogram, bb_upper, bb_middl
 def main_loop():
     while True:
         try:
-            limit_needed = max(RSI_PERIOD, MACD_SLOW, BB_PERIOD) + 10  # малко резерв
-            prices, last_candle_dt = fetch_prices(limit=limit_needed)
+            prices, last_candle_dt = fetch_prices()
             current_price = prices[-1]
 
-            rsi = calculate_rsi(prices, RSI_PERIOD)
-            macd, macd_signal, macd_histogram = calculate_macd(prices)
-            bb_upper, bb_middle, bb_lower = calculate_bollinger_bands(prices)
+            rsi, macd, macd_signal, macd_histogram, bb_upper, bb_middle, bb_lower = calculate_indicators(prices)
 
             action = determine_action(rsi, macd, macd_signal, macd_histogram, bb_upper, bb_lower, current_price)
 
