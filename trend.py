@@ -7,6 +7,7 @@ import pandas as pd
 from datetime import datetime, timezone
 from supabase import create_client
 
+# Init
 logging.basicConfig(level=logging.INFO)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -15,56 +16,83 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 BINANCE_SYMBOL = "BTCUSDT"
 RSI_PERIOD = 14
-FETCH_INTERVAL = 60  # секунди
+FETCH_INTERVAL = 60  # seconds
 
-def fetch_prices(symbol="BTCUSDT", interval="1m", limit=100):
-    url = "https://api.binance.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
+def fetch_prices(symbol="BTCUSDT", interval="1m", limit=RSI_PERIOD + 50):
+    url = f"https://api.binance.com/api/v3/klines"
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit
+    }
     res = requests.get(url, params=params)
     res.raise_for_status()
     data = res.json()
-    df = pd.DataFrame(data, columns=[
-        "open_time","open","high","low","close","volume",
-        "close_time","quote_asset_volume","number_of_trades",
-        "taker_buy_base_asset_volume","taker_buy_quote_asset_volume","ignore"
-    ])
-    df["close"] = df["close"].astype(float)
-    return df
+    close_prices = [float(candle[4]) for candle in data]  # Close price at index 4
+    return close_prices
 
-def calculate_rsi(df, period=14):
+def calculate_rsi(prices, period=14):
+    df = pd.DataFrame(prices, columns=["close"])
     delta = df["close"].diff()
+
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
+
     avg_gain = gain.rolling(window=period).mean()
     avg_loss = loss.rolling(window=period).mean()
+
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
-    return rsi
+    return round(rsi.iloc[-1], 2)
 
-def calculate_macd(df):
-    exp1 = df["close"].ewm(span=12, adjust=False).mean()
-    exp2 = df["close"].ewm(span=26, adjust=False).mean()
+def calculate_macd(prices, slow=26, fast=12, signal=9):
+    df = pd.DataFrame(prices, columns=["close"])
+    exp1 = df["close"].ewm(span=fast, adjust=False).mean()
+    exp2 = df["close"].ewm(span=slow, adjust=False).mean()
     macd = exp1 - exp2
-    signal = macd.ewm(span=9, adjust=False).mean()
-    histogram = macd - signal
-    return macd, signal, histogram
+    macd_signal = macd.ewm(span=signal, adjust=False).mean()
+    macd_hist = macd - macd_signal
+    return round(macd.iloc[-1], 4), round(macd_signal.iloc[-1], 4), round(macd_hist.iloc[-1], 4)
 
-def calculate_bollinger_bands(df, period=20, std_multiplier=2):
+def calculate_bollinger_bands(prices, period=20, std_dev=2):
+    df = pd.DataFrame(prices, columns=["close"])
     sma = df["close"].rolling(window=period).mean()
-    std = df["close"].rolling(window=period).std()
-    upper_band = sma + std_multiplier * std
-    lower_band = sma - std_multiplier * std
-    return upper_band, sma, lower_band
+    rstd = df["close"].rolling(window=period).std()
+    upper_band = sma + std_dev * rstd
+    lower_band = sma - std_dev * rstd
+    return round(upper_band.iloc[-1], 2), round(sma.iloc[-1], 2), round(lower_band.iloc[-1], 2)
 
-def determine_action(rsi, macd, macd_signal, price, bb_upper, bb_lower):
-    if rsi < 30 and price < bb_lower and macd > macd_signal:
+def combined_action(rsi, macd, macd_signal, bb_upper, bb_lower, price):
+    if rsi > 70:
+        rsi_signal = "Продай"
+    elif rsi < 30:
+        rsi_signal = "Купи"
+    else:
+        rsi_signal = "Задръж"
+
+    if macd > macd_signal:
+        macd_signal_val = "Купи"
+    elif macd < macd_signal:
+        macd_signal_val = "Продай"
+    else:
+        macd_signal_val = "Задръж"
+
+    if price > bb_upper:
+        bb_signal = "Продай"
+    elif price < bb_lower:
+        bb_signal = "Купи"
+    else:
+        bb_signal = "Задръж"
+
+    signals = [rsi_signal, macd_signal_val, bb_signal]
+    if signals.count("Купи") >= 2:
         return "Купи"
-    elif rsi > 70 and price > bb_upper and macd < macd_signal:
+    elif signals.count("Продай") >= 2:
         return "Продай"
     else:
         return "Задръж"
 
-def save_trend(price, rsi, macd, macd_signal, macd_histogram, bb_upper, bb_middle, bb_lower, action):
+def save_trend(price, rsi, macd, macd_signal, macd_hist, bb_upper, bb_middle, bb_lower, action):
     data = {
         "id": str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -72,45 +100,30 @@ def save_trend(price, rsi, macd, macd_signal, macd_histogram, bb_upper, bb_middl
         "rsi": float(rsi),
         "macd": float(macd),
         "macd_signal": float(macd_signal),
-        "macd_histogram": float(macd_histogram),
-        "bb_upper": float(bb_upper),
-        "bb_middle": float(bb_middle),
-        "bb_lower": float(bb_lower),
+        "macd_histogram": float(macd_hist),
+        "bollinger_upper": float(bb_upper),
+        "bollinger_middle": float(bb_middle),
+        "bollinger_lower": float(bb_lower),
         "action": action
     }
     res = supabase.table("trend_data").insert(data).execute()
-    if res.status_code == 201:
-        logging.info(f"✅ Записано успешно: {action}")
-    else:
-        logging.error(f"❌ Грешка при запис: {res.json()}")
+    logging.info(f"✅ Записано успешно: {action}")
 
 def main_loop():
     while True:
         try:
-            df = fetch_prices(BINANCE_SYMBOL, "1m", limit=100)
+            prices = fetch_prices(BINANCE_SYMBOL)
+            current_price = prices[-1]
 
-            rsi_series = calculate_rsi(df, RSI_PERIOD)
-            macd_series, macd_signal_series, macd_histogram_series = calculate_macd(df)
-            bb_upper, bb_middle, bb_lower = calculate_bollinger_bands(df)
+            rsi = calculate_rsi(prices, RSI_PERIOD)
+            macd, macd_signal, macd_hist = calculate_macd(prices)
+            bb_upper, bb_middle, bb_lower = calculate_bollinger_bands(prices)
 
-            latest = df.iloc[-1]
-            price = latest["close"]
-            rsi = rsi_series.iloc[-1]
-            macd = macd_series.iloc[-1]
-            macd_signal = macd_signal_series.iloc[-1]
-            macd_histogram = macd_histogram_series.iloc[-1]
-            upper = bb_upper.iloc[-1]
-            middle = bb_middle.iloc[-1]
-            lower = bb_lower.iloc[-1]
+            action = combined_action(rsi, macd, macd_signal, bb_upper, bb_lower, current_price)
 
-            action = determine_action(rsi, macd, macd_signal, price, upper, lower)
+            logging.info(f"📈 Цена: {current_price}, RSI: {rsi}, MACD: {macd}, MACD Signal: {macd_signal}, BB Upper: {bb_upper}, BB Lower: {bb_lower}, Действие: {action}")
 
-            logging.info(
-                f"📈 Цена: {price}, RSI: {rsi:.2f}, MACD: {macd:.4f}, MACD Signal: {macd_signal:.4f}, "
-                f"BB Upper: {upper:.2f}, BB Middle: {middle:.2f}, BB Lower: {lower:.2f}, Действие: {action}"
-            )
-
-            save_trend(price, rsi, macd, macd_signal, macd_histogram, upper, middle, lower, action)
+            save_trend(current_price, rsi, macd, macd_signal, macd_hist, bb_upper, bb_middle, bb_lower, action)
 
         except Exception as e:
             logging.error(f"❌ Грешка: {e}")
