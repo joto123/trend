@@ -1,54 +1,53 @@
-import datetime
-import logging
-import uuid
-from supabase import create_client, Client
 import os
+from datetime import datetime, timezone
+from supabase import create_client, Client
 
-# Настройка на логване - ще пише в конзолата
-logging.basicConfig(
-    format='%(asctime)s %(levelname)s: %(message)s',
-    level=logging.INFO
-)
-
-# Инициализиране на Supabase клиента от променливи на средата (за сигурност)
+# Вземаме URL и ключ от environment variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    logging.error("Не са зададени SUPABASE_URL или SUPABASE_KEY!")
-    exit(1)
+    raise ValueError("Missing Supabase credentials in environment variables")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def save_trend(price, rsi, action):
-    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='milliseconds')
+# Мапинг на кирилски действия към валидни за базата
+ACTION_MAP = {
+    "Купи": "buy",
+    "Продай": "sell",
+    "Задръж": "hold",
+    # Можеш да добавиш още ако имаш нужда
+}
 
-    if rsi is None or rsi < 1:
-        logging.warning(f"Пропускане на запис - RSI твърде нисък: {rsi}")
-        return
+def save_trend(price: float, rsi: float, action_bg: str):
+    # Мапваме действие на валидна стойност
+    action = ACTION_MAP.get(action_bg)
+    if action is None:
+        raise ValueError(f"Invalid action: {action_bg}")
 
     data = {
-        "id": str(uuid.uuid4()),
-        "timestamp": timestamp,
+        # PostgreSQL timestamp with timezone в ISO формат, винаги с UTC
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "price": price,
         "rsi": rsi,
-        "action": action,
+        "action": action
     }
 
     res = supabase.table("trend_data").insert(data).execute()
 
-    if res.status_code != 201:
-        logging.error(f"Грешка при запис в базата: {res.data}")
+    # res.data съдържа резултата, res.error — грешката (ако има)
+    if res.error:
+        print("Error inserting data:", res.error)
     else:
-        logging.info(f"Записан тренд: {data}")
+        print("Insert successful:", res.data)
 
 def main():
-    # Примерни данни, тук сложи реалната логика
-    price = 100.5
-    rsi = 45.0
-    action = "buy"
+    # Тук подготви или вземи данните си (пример)
+    price = 108000.0
+    rsi = 55.0
+    action_bg = "Задръж"  # Пример на кирилица, който мапваме към "hold"
 
-    save_trend(price, rsi, action)
+    save_trend(price, rsi, action_bg)
 
 if __name__ == "__main__":
     main()
