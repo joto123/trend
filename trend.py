@@ -4,37 +4,30 @@ from supabase import create_client, Client
 import os
 import logging
 
-# Логване
+# Настройки за лог
 logging.basicConfig(level=logging.INFO)
 
-# Supabase setup
+# Supabase данни от .env или директно тук
 url: str = os.getenv("SUPABASE_URL")
 key: str = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(url, key)
 
-# Действия на английски => български
-ACTION_MAP = {
-    "buy": "Купи",
-    "sell": "Продай",
-    "hold": "Задръж"
-}
-
-# ВАЛИДНИ действия според базата (съответстващи на CHECK CONSTRAINT-а)
-VALID_ACTIONS = ["buy", "sell"]  # ⚠️ добави "hold", ако е позволено в базата
+# ВАЛИДНИ стойности в БАЗАТА (на български!)
+VALID_ACTIONS_BG = ["Купи", "Продай", "Задръж"]  # съвпадат с CHECK CONSTRAINT
 
 def analyze_trend(price, rsi):
-    """Проста логика за тренд (примерно):"""
+    """Връща действие на български спрямо RSI"""
     if rsi < 30:
-        return "buy"
+        return "Купи"
     elif rsi > 70:
-        return "sell"
+        return "Продай"
     else:
-        return "hold"  # само ако е разрешено от базата
+        return "Задръж"
 
-def save_trend(price, rsi, action_en):
+def save_trend(price, rsi, action_bg):
     """Записва тренда в Supabase, ако е валиден action"""
-    if action_en not in VALID_ACTIONS:
-        logging.warning(f"Пропуснат запис – '{action_en}' не е разрешен в базата.")
+    if action_bg not in VALID_ACTIONS_BG:
+        logging.warning(f"Пропуснат запис – '{action_bg}' не е валиден.")
         return
 
     data = {
@@ -42,26 +35,24 @@ def save_trend(price, rsi, action_en):
         "timestamp": datetime.utcnow().isoformat(),
         "price": price,
         "rsi": rsi,
-        "action": action_en  # ⚠️ трябва да е съвместим с CHECK CONSTRAINT
+        "action": action_bg
     }
 
     try:
         res = supabase.table("trend_data").insert(data).execute()
-        logging.info(f"Успешно записано: {res}")
+        logging.info(f"✅ Записано успешно: {action_bg}")
     except Exception as e:
-        logging.error(f"Грешка при запис: {e}")
+        logging.error(f"❌ Грешка при запис: {e}")
 
 def main():
-    # Примерни данни
+    # Примерни входни данни
     price = 108000.00
     rsi = 55.0
 
-    action_en = analyze_trend(price, rsi)
-    action_bg = ACTION_MAP.get(action_en, "Неизвестно")
+    action_bg = analyze_trend(price, rsi)
+    logging.info(f"📈 Цена: {price}, RSI: {rsi}, Действие: {action_bg}")
 
-    logging.info(f"Цена: {price}, RSI: {rsi}, Действие: {action_bg} ({action_en})")
-
-    save_trend(price, rsi, action_en)
+    save_trend(price, rsi, action_bg)
 
 if __name__ == "__main__":
     main()
