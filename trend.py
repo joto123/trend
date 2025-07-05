@@ -104,11 +104,7 @@ def main_loop():
 
             action = determine_action(rsi, macd, macd_signal, macd_histogram, bb_upper, bb_lower, current_price)
 
-            logging.info(
-                f"📈 Цена: {current_price}, RSI: {rsi}, MACD: {macd}, MACD Signal: {macd_signal}, "
-                f"MACD Hist: {macd_histogram}, BB Upper: {bb_upper}, BB Lower: {bb_lower}, "
-                f"Време: {last_candle_dt.isoformat()}, Действие: {action}"
-            )
+            logging.info(f"📈 Цена: {current_price}, RSI: {rsi}, MACD: {macd}, MACD Signal: {macd_signal}, MACD Hist: {macd_histogram}, BB Upper: {bb_upper}, BB Lower: {bb_lower}, Време: {last_candle_dt.isoformat()}, Действие: {action}")
 
             save_trend(current_price, rsi, macd, macd_signal, macd_histogram, bb_upper, bb_middle, bb_lower, action)
 
