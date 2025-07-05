@@ -1,25 +1,32 @@
+import os
 import uuid
-import logging
 from datetime import datetime, timezone
-from supabase import create_client, Client
+import logging
+from supabase import create_client
 
-# Настройки
-url = "https://xauzvpdomztnishnhgyw.supabase.co"
-key = "YOUR_SUPABASE_API_KEY"  # <-- замени с твоя реален ключ
-supabase: Client = create_client(url, key)
-
-# Логване
+# Настройка на логване
 logging.basicConfig(level=logging.INFO)
 
-def get_price():
-    # Тук можеш да свържеш реален източник за цена
-    return 108000.0
+# 🟢 Вземане на ключове от environment variables
+url = os.getenv("SUPABASE_URL")
+key = os.getenv("SUPABASE_KEY")
 
-def get_rsi():
-    # Тук можеш да свържеш реален източник за RSI
+# Проверка дали ключовете са зададени
+if not url or not key:
+    raise EnvironmentError("❌ SUPABASE_URL и/или SUPABASE_KEY не са зададени в средата!")
+
+# Създаване на клиент
+supabase = create_client(url, key)
+
+def get_price():
+    # Примерна фиксирана цена — тук можеш да добавиш реално API
+    return 108000.00
+
+def calculate_rsi():
+    # Примерна фиксирана RSI стойност — замени с реална логика при нужда
     return 55.0
 
-def calculate_action(rsi):
+def determine_action(rsi):
     if rsi > 70:
         return "Продай"
     elif rsi < 30:
@@ -36,20 +43,19 @@ def save_trend(price, rsi, action):
         "action": action
     }
 
-    res = supabase.table("trend_data").insert(data).execute()
-    if res.status_code == 201:
+    try:
+        res = supabase.table("trend_data").insert(data).execute()
         logging.info(f"✅ Записано успешно: {action}")
-    else:
-        logging.error(f"❌ Грешка при запис: {res.data}")
+    except Exception as e:
+        logging.error("⚠️ Грешка при запис:", exc_info=True)
 
 def main():
     price = get_price()
-    rsi = get_rsi()
-    action_bg = calculate_action(rsi)
+    rsi = calculate_rsi()
+    action = determine_action(rsi)
 
-    logging.info(f"📈 Цена: {price}, RSI: {rsi}, Действие: {action_bg}")
-
-    save_trend(price, rsi, action_bg)
+    logging.info(f"📈 Цена: {price}, RSI: {rsi}, Действие: {action}")
+    save_trend(price, rsi, action)
 
 if __name__ == "__main__":
     main()
